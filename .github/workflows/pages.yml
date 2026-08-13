@@ -23,14 +23,55 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Build Retina toon portrait atlas
+        shell: bash
+        run: |
+          python -m pip install --quiet pillow pillow-avif-plugin
+          python - <<'PY'
+          from pathlib import Path
+          import base64, re, hashlib
+          import pillow_avif
+          from PIL import Image, ImageFilter
+
+          chunks=[]
+          for p in sorted(Path('assets').glob('atlas[0-9][0-9].js')):
+              text=p.read_text(encoding='utf-8')
+              m=re.search(r'\+"([A-Za-z0-9+/=]+)"', text)
+              if not m:
+                  raise SystemExit(f'Could not read atlas data from {p}')
+              chunks.append(m.group(1))
+          if len(chunks) != 18:
+              raise SystemExit(f'Expected 18 atlas chunks, found {len(chunks)}')
+
+          raw=base64.b64decode(''.join(chunks))
+          src_path=Path('/tmp/toon-atlas-source.avif')
+          src_path.write_bytes(raw)
+          src=Image.open(src_path).convert('RGBA')
+          print('Source atlas:', src.size, 'bytes:', len(raw), 'sha256:', hashlib.sha256(raw).hexdigest())
+
+          target=(192*8,192*6)
+          hq=src.resize(target, Image.Resampling.LANCZOS)
+          hq=hq.filter(ImageFilter.UnsharpMask(radius=1.0, percent=140, threshold=2))
+          out=Path('assets/toons-hq.png')
+          hq.save(out, format='PNG', optimize=True, compress_level=6)
+
+          check=Image.open(out)
+          if check.size != target:
+              raise SystemExit(f'Unexpected HQ atlas size: {check.size}')
+          print('HQ atlas:', check.size, 'bytes:', out.stat().st_size, 'sha256:', hashlib.sha256(out.read_bytes()).hexdigest())
+          PY
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
         with:
           enablement: true
+
       - name: Upload site
         uses: actions/upload-pages-artifact@v4
         with:
           path: .
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
